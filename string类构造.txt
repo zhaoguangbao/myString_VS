@@ -1,0 +1,419 @@
+/*###################################################################################################################
+
+												string类构造
+										主要构造思想：采用string pool实现
+
+###################################################################################################################*/
+
+//注：
+	//1.友元函数必须在同一文件内定义才能访问当类的私有成员
+	//2.类String中友元类Cstr本意为了new与delete的配对使用，但后期发现并没有解决该问题
+	//3.当多个类耦合在一起的时候，注意“使用不完整类”的错误提示，解决方法，可把类定义放在外面
+	//4.不同编译器对头文件的形式要求不太一致
+		//VS对可运行的*.cpp要求头文件以#include "stdafx.h"开始
+		//VS对自定义头文件与库的头文件的#include形式没严格的要求
+		//codeblocks要求库头文件以<>形式出现，对自定义头文件以""形式出现——C++标准
+		
+//BUG:
+	//1.针对main函数，return 0;无法退出主程序，停顿在最后的~String(){delete rep;}中，只能使用exit(0);退出
+		//可能由于内存处理不当所导致的问题
+	//2.String operator+(const String&,const String&/const char*);存在着歧义性
+	
+/*--------------------------------------------------------------------------------------------------------------------
+
+String.h
+
+---------------------------------------------------------------------------------------------------------------------*/
+
+#ifndef __MY_STRING_H_
+#define __MY_STRING_H_
+
+#include <string.h> //
+#include <iostream>
+
+namespace myString //该逻辑注重对string pool的实现
+{
+	const int maxsize = 100; //一次输入最大缓冲区大小
+
+	class Range{};//异常类，检查下标范围
+	
+    struct Srep//string pool实现结构
+    {
+        char *s;
+        int sz;
+        int n;//作为指向同一个字符串对象个数的标记
+        Srep(int nsz,const char* p)
+        {
+            n=1;
+            sz=nsz;
+            s=new char[sz+1];//基于数组实现原则：对于数组结尾元素必须有意义
+            strcpy(s,p);
+        }
+        ~Srep()
+        {
+            delete[] s;//有new必有delete
+			s = 0;
+        }
+        Srep* get_own_copy()//返回副本，当修改对象时调用
+        {
+            if(1==n)//当目前指向该string的对象只有一份时，返回其本身（对本身做修改）
+                return this;
+            n--;//当指向该string的对象有多个时，返回新开辟内存块，基于新开辟内存修改
+            return new Srep(sz,s);
+        }
+        void assign(int nsz,const char* p)//复制赋值时调用
+        {
+            if(sz!=nsz) //复制赋值时删除原内存，若赋值前后字符串长度相同则不需要开辟新内存
+            {
+                delete[] s;
+                sz=nsz;
+                s=new char[sz+1];
+            }
+            strcpy(s,p);
+        }
+    private:
+        Srep(const Srep&);//禁止复制构造
+        Srep& operator=(const Srep&);//禁止复制赋值
+    };
+    class String
+    {
+        Srep *rep;
+    public:
+        class Cref;
+		friend class Cstr;//
+        //constructor
+        String();
+        String(const char*);
+        String(const String&);
+
+        //operator
+        String& operator=(const char*);
+        String& operator=(const String&);
+
+        String& operator+=(const String&);
+        String& operator+=(const char*);
+
+        friend std::ostream& operator<<(std::ostream& out,const String& str)
+        {
+            out<<str.rep->s;
+            return out;
+        }
+        friend std::istream& operator>>(std::istream& in,String& str)
+        {
+			in.getline(str.rep->s, maxsize);
+			//str.rep->sz = strlen(str.rep->s);//非c风格的字符串故strlen无法获取str.rep->s的长度
+			str.rep->sz = static_cast<int>(in.gcount()-1);
+            return in;
+        }
+
+        friend bool operator==(const String& str1,const String& str2)
+        {
+			return (strcmp(str1.rep->s, str2.rep->s) == 0);
+        }
+        friend bool operator!=(const String& str1,const String& str2)
+        {
+			return (strcmp(str1.rep->s, str2.rep->s) != 0);
+        }
+
+        //deconstructor
+        ~String();
+
+        //[]
+        void check(int i) const
+        {
+            if(i<0 || (rep->sz)<=i)
+                throw Range();
+        }
+        char read(int i) const
+        {
+            return rep->s[i];
+        }
+        void write(int i,char c)
+        {
+            rep=rep->get_own_copy();
+            rep->s[i]=c;
+        }
+		const char* my_c_str();
+
+        Cref operator[](int i);
+    };
+
+    //assist function
+    String operator+(const String&,const String&);
+    String operator+(const String&,const char*);//test function: String(const char*);
+
+    class String::Cref//作用如同char，协助[]操作符的实现
+    {
+        friend class String;//
+        String& s;
+        int i;
+        Cref(String& ss,int ii):s(ss),i(ii) {} //const string& ss -- error
+    public:
+        operator char()
+        {
+            return s.read(i);   //隐式转换为char型
+        }
+        void operator=(char c)
+        {
+            s.write(i,c);
+        }
+    };
+
+
+	class Cstr
+	{
+	public:
+		//friend class String;
+		char *pStr;
+		Cstr(const String& str)
+		{
+			pStr = new char[str.rep->sz+1];
+			pStr[str.rep->sz] = '\0';
+		}
+		~Cstr()
+		{
+			delete[] pStr;
+		}
+	};
+
+};
+
+
+#endif // __MY_STRING_H_
+
+/*--------------------------------------------------------------------------------------------------------------------
+
+String.cpp
+
+---------------------------------------------------------------------------------------------------------------------*/
+
+
+#include "stdafx.h"
+#include "String.h"
+#include <string.h>
+#include <iostream>
+
+using namespace myString;
+
+String::String()
+{
+    rep=new Srep(0," ");// ?? delete ?? 
+}
+
+//String str1("char_str");
+//String str2(str1);
+String::String(const String& str)
+{
+    str.rep->n++; //复制构造标记n++ / const ??
+    rep=str.rep;//rep.operator=(str.rep);
+}
+
+//String str("char_str");
+String::String(const char* cstr)//作为隐式转换构造函数，实现"char_str"作为文字量
+{
+    rep=new Srep(strlen(cstr),cstr);
+}
+
+String::~String()
+{
+	/*if (--rep->n == 0)//对当前字符串只有一个引用时，离开作用域时析构删除
+	{
+		delete rep;
+		rep = 0;
+	}*/
+    rep->n--;
+    if(rep->n==0)
+        delete rep;
+}
+
+//String str1="char_str1";
+//String str2("char_str2");
+//String str2=str1;
+String& String::operator=(const String& str)
+{
+	str.rep->n++;//同复制构造相同，复制赋值时标记n++
+    if(--rep->n==0)
+        delete rep; //若赋值前指向该字符串的只有一个对象，则在赋值后删除原对象
+    rep=str.rep;
+    return *this;
+}
+
+//String str="char_str";
+String& String::operator=(const char* cstr)
+{
+    if(rep->n==1) //若当前指向该内存的只有一个对象则可对该区域做任意修改
+        rep->assign(strlen(cstr),cstr);
+    else//若指向该内存的不止一个对象则新开辟内存存储新的字符串量
+    {
+        rep->n--;
+        rep=new Srep(strlen(cstr),cstr);
+    }
+    return *this;
+}
+
+String& String::operator+=(const String& str)
+{
+    rep->s=strcat(rep->s,str.rep->s);
+    return *this;
+}
+String& String::operator+=(const char* cstr)
+{
+    rep->s=strcat(rep->s,cstr);
+    return *this;
+}
+
+//friend function/在class外部时也不能访问类的私有成员
+String operator+(const String& str1,const String& str2)
+{
+    String strTemp=str1;
+    strTemp+=str2;
+    return strTemp;
+}
+String operator+(const String& str1,const char* cstr)
+{
+    String strTemp=str1;
+    strTemp+=cstr;
+    return strTemp;
+}
+
+/*extern std::ostream cout;
+extern std::istream cin;*/
+
+String::Cref String::operator[](int i)
+{
+    check(i);
+    return Cref(*this,i);
+}
+
+const char* String::my_c_str()
+{
+	Cstr* cstr = new Cstr(*this);
+	for (int i = 0; i < rep->sz; i++)
+		cstr->pStr[i] = rep->s[i];
+	return cstr->pStr;
+}
+
+/*--------------------------------------------------------------------------------------------------------------------
+
+main.cpp
+
+---------------------------------------------------------------------------------------------------------------------*/
+
+// myString_VS.cpp : 定义控制台应用程序的入口点。
+//
+
+#include "stdafx.h"
+#include <iostream>
+#include "String.h"
+
+using namespace myString;
+
+String f(String a, String b)
+{
+	a[2] = 'x';
+	char c = b[3];
+	std::cout << "in f: " << a << ' ' << b << ' ' << c << std::endl;
+	return b;
+}
+
+using std::cin;
+using std::cout;
+using std::endl;
+
+int _tmain(int argc, _TCHAR* argv[])
+{
+	/*myString::String str("char_str");
+	cout<<str;*/
+	String x, y;
+	cout << "Please enter two strings" << endl;
+	cin >> x >> y;
+	cout << "input: " << x << ' ' << y << endl;
+	String z = x;
+	//test my_c_str()
+	const char* p = x.my_c_str();
+	printf("my_c_str:%s\n", p);
+	try
+	{
+		char ch = x[2];
+		cout << ch << endl;
+	}
+	catch (Range)
+	{
+		cout << "The bad range!" << endl;
+		exit(0);
+	}
+	y=f(x,y);
+	if(x!=z)
+		cout<<"x corrupted!"<<endl;
+	x[0]='!';
+	if(x==z)
+		cout<<"write failed!"<<endl;
+	cout << "exit: " << x << ' ' << y << ' ' << z << '\n';
+	exit(0);//~String():delete rep; error!!!! return 0;在执行过程中先释放程序占用的资源
+	//return 0;
+}
+
+
+
+/*--------------------------------------------------------------------------------------------------------------------
+
+main解析
+
+---------------------------------------------------------------------------------------------------------------------*/
+
+/*--------按照main函数的执行顺序---------
+String x, y;--------调用默认构造函数
+			--------String::String()
+					{
+						rep=new Srep(0," ");
+					}
+cin >> x >> y;------解释“表达式的值”：表达式的值为调用函数的值
+				----对于>>/<<运算符的重载
+				----friend std::ostream& operator<<(std::ostream& out,const String& str);
+					friend std::istream& operator>>(std::istream& in,String& str);
+					函数返回类型i/ostream& --> cin >> x 该表达式的值即为i/ostream&，故可以连续使用>>/<<
+			 -------执行结果：
+						x.rep->s==str_x,y.rep->s==str_y;	x.rep->n==1,y.rep->n==1;	x.rep->sz=len_x,y.rep->sz=len_y;
+String z = x;-------调用复制构造函数
+			 -------String(const String&)
+					{
+						str.rep->n++;
+						rep=str.rep;
+					}
+			 -------执行结果：
+						x.rep->n==2; z.rep=x.rep;//指向str_x的有两个对象x,z
+*****重点*****
+char ch = x[2];-----x[2]
+					执行流程：
+						-->x.operator[](2){return Cref(*this,i);}
+							-->Cref(x,2):s(x),i(2) {}//参数列表的使用减少了中间临时变量的产生，故一定程度上提升了性能
+								-->char ch=Cref(x,2);//自定义类的隐式转换
+									-->Cref.char(),operator char(){return s.read(i);}
+										-->x.read(2),char read(int i) const{return s[i]};
+											-->最后利用内部类型char的operator=实现对char的赋值
+*****重点*****
+y=f(x,y);-----------调用函数，由于函数形参及返回值均是以值类型的形式出现，必然会伴随着值的复制构造
+					String f(String a, String b)
+					{
+						a[2] = 'x';
+						char c = b[3];
+						std::cout << "in f: " << a << ' ' << b << ' ' << c << std::endl;
+						return b;
+					}
+					执行流程：
+						-->对a,b形参复制构造，构造顺序不确定，在我使用时先构造b，再构造a
+							-->a[2] = 'x';		*****重点*****
+								-->a[2],a.operator[](2){return Cref(*this,i);}
+									-->Cref(*this,i)='x',void operator=(char c){s.write(i);}
+										-->s.write(2),void write(int i,char ){
+											rep=rep->get_own_copy();
+											rep->s[i]=c;
+											}
+											-->rep->get_own_copy();//看对应注释即可，实现对a[2]的写操作
+						在执行完成后会调用相应的析构函数~String();执行清理工作
+*/
+
+
+
+
+

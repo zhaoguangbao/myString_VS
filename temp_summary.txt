@@ -1,0 +1,112 @@
+/*#################################################################################################################
+
+									namespace提供用户界面与实现界面的区别
+
+#################################################################################################################*/
+
+//example: myString
+//通常来说用户界面要比实现界面要小
+
+//实现界面：
+	#ifndef __MY_STRING_H_
+	#define __MY_STRING_H_
+
+	#include <string.h> //
+
+	namespace myString //该逻辑注重对string pool的实现
+	{
+		class String
+		{
+			struct Srep; //string pool
+			Srep *rep;
+		public:
+			class Cref;
+			class Range {};
+
+			String();
+			String(const char*);
+			String(const String&);
+
+			String& operator=(const char*);
+			String& operator=(const String&);
+
+			~String();
+		};
+
+		struct String::Srep
+		{
+			char *s;
+			int sz;
+			int n;//作为指向同一个字符串对象个数的标记
+			Srep(int nsz,const char* p)
+			{
+				n=1;
+				sz=nsz;
+				s=new char[sz+1];
+				strcpy(s,p);
+			}
+			~Srep()
+			{
+				delete[] s;
+			}
+			Srep* get_own_copy()
+			{
+				if(1==n)
+					return this;
+				n--;
+				return new Srep(sz,s);
+			}
+			void assign(int nsz,const char* p)
+			{
+				if(sz!=nsz) //复制赋值时删除原内存，若赋值前后字符串长度相同则不需要开辟新内存
+				{
+					delete[] s;
+					sz=nsz;
+					s=new char[sz+1];
+				}
+				strcpy(s,p);
+			}
+		private:
+			Srep(const Srep&);//禁止复制构造
+			Srep& operator=(const Srep&);//禁止复制赋值
+		};
+	};
+
+	#endif // __MY_STRING_H_
+	
+//用户界面：
+	//此时不能再包含String.h头文件，否则会导致重定义
+	namespace myString
+	{
+		class String
+		{
+		public:
+			class Cref;
+			class Range {};
+
+			String();
+			String(const char*);//将此行注释则程序编译报错
+			String(const String&);
+
+			String& operator=(const char*);
+			String& operator=(const String&);
+
+			~String();
+		};
+	};
+	int main()
+	{
+		myString::String str("char_str");
+		return 0;
+	}
+
+//另一种常规的实现方式: main.cpp/String.h/String.cpp
+	#include "String.h" //注意""与<>区别
+
+	using namespace myString; //使用指令，污染全局命名空间
+
+	int main()
+	{
+		String str("char_str");
+		return 0;
+	}
